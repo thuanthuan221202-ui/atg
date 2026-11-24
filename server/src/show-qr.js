@@ -3,7 +3,7 @@ const qrcode = require('qrcode-terminal');
 const { loadOrCreateConfig, getNetworkAddresses } = require('./config');
 
 const config = loadOrCreateConfig();
-const { lan, tailscale, tailscaleInstalled } = getNetworkAddresses();
+const { lan, tailscale, tailscaleInstalled, funnelUrl } = getNetworkAddresses();
 const lanIp = lan[0] && lan[0].ip;
 const tsIp = tailscale[0] && tailscale[0].ip;
 
@@ -14,10 +14,14 @@ console.log(`  PC Name   : ${os.hostname()}`);
 console.log(`  Port      : ${config.port}`);
 console.log(`  Auth Token: ${config.token}`);
 
-if (tsIp) {
+if (funnelUrl) {
+  const funnelPair = `agyr://connect?url=${encodeURIComponent(funnelUrl)}&token=${encodeURIComponent(config.token)}&name=${encodeURIComponent(os.hostname() + ' (4G/5G HTTPS)')}`;
+  console.log(`\n  [1] 4G/5G HTTPS CO DINH (KHONG CAN APP VPN TREN IPHONE): ${funnelUrl}`);
+  qrcode.generate(funnelPair, { small: true });
+} else if (tsIp) {
   const tsUrl = `http://${tsIp}:${config.port}`;
   const tsPair = `agyr://connect?url=${encodeURIComponent(tsUrl)}&token=${encodeURIComponent(config.token)}&name=${encodeURIComponent(os.hostname() + ' (Tailscale 4G)')}`;
-  console.log(`\n  [1] TAILSCALE 4G/5G (Dung moi noi): ${tsUrl}`);
+  console.log(`\n  [1] TAILSCALE 4G/5G: ${tsUrl}`);
   qrcode.generate(tsPair, { small: true });
 } else if (tailscaleInstalled) {
   console.log('\n  [!] Tailscale da cai dat nhung chua dang nhap / chua bat.');

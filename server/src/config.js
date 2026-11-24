@@ -84,6 +84,22 @@ function getTailscaleCliIp() {
   return { installed: false, ip: null };
 }
 
+function getTailscaleFunnelUrl() {
+  const candidates = [
+    'C:\\Program Files\\Tailscale\\tailscale.exe',
+    'tailscale'
+  ];
+  for (const bin of candidates) {
+    if (path.isAbsolute(bin) && !fs.existsSync(bin)) continue;
+    try {
+      const out = execFileSync(bin, ['funnel', 'status'], { timeout: 2500, encoding: 'utf8', windowsHide: true });
+      const m = out.match(/https:\/\/[a-zA-Z0-9.-]+\.ts\.net(?::\d+)?/);
+      if (m) return m[0];
+    } catch (_) {}
+  }
+  return null;
+}
+
 function getNetworkAddresses() {
   const nets = os.networkInterfaces();
   const lan = [];
@@ -125,7 +141,8 @@ function getNetworkAddresses() {
   };
   lan.sort((a, b) => score(a) - score(b));
 
-  return { lan, tailscale, tailscaleInstalled: tsCli.installed || tailscale.length > 0 };
+  const funnelUrl = getTailscaleFunnelUrl();
+  return { lan, tailscale, tailscaleInstalled: tsCli.installed || tailscale.length > 0, funnelUrl };
 }
 
 function normalizeWindowsPath(rawPath) {
