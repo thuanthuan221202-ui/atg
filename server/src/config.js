@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'bridge-config.json');
 
@@ -60,10 +61,34 @@ function loadOrCreateConfig() {
   return config;
 }
 
+function getTailscaleCliIp() {
+  const candidates = [
+    'C:\\Program Files\\Tailscale\\tailscale.exe',
+    'tailscale'
+  ];
+  for (const bin of candidates) {
+    if (path.isAbsolute(bin) && !fs.existsSync(bin)) continue;
+    try {
+      const out = execFileSync(bin, ['ip', '-4'], { timeout: 2500, encoding: 'utf8', windowsHide: true }).trim();
+      const firstLine = out.split(/\r?\n/)[0]?.trim();
+      if (firstLine && /^100\./.test(firstLine)) {
+        return { installed: true, ip: firstLine };
+      }
+      return { installed: true, ip: null };
+    } catch (_) {
+      if (path.isAbsolute(bin) && fs.existsSync(bin)) {
+        return { installed: true, ip: null };
+      }
+    }
+  }
+  return { installed: false, ip: null };
+}
+
 function getNetworkAddresses() {
   const nets = os.networkInterfaces();
   const lan = [];
   const tailscale = [];
+  const seenTs = new Set();
 
   for (const [name, addrs] of Object.entries(nets)) {
     if (!addrs) continue;
@@ -72,11 +97,20 @@ function getNetworkAddresses() {
       const ip = addr.address;
       const isTailscale = name.toLowerCase().includes('tailscale') || /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(ip);
       if (isTailscale) {
-        tailscale.push({ name, ip });
+        if (!seenTs.has(ip)) {
+          seenTs.add(ip);
+          tailscale.push({ name, ip });
+        }
       } else {
         lan.push({ name, ip });
       }
     }
+  }
+
+  const tsCli = getTailscaleCliIp();
+  if (tsCli.ip && !seenTs.has(tsCli.ip)) {
+    seenTs.add(tsCli.ip);
+    tailscale.unshift({ name: 'Tailscale', ip: tsCli.ip });
   }
 
   // Prefer Wi-Fi / Ethernet over virtual Hyper-V / VMware / vEthernet adapters
@@ -89,7 +123,7 @@ function getNetworkAddresses() {
   };
   lan.sort((a, b) => score(a) - score(b));
 
-  return { lan, tailscale };
+  return { lan, tailscale, tailscaleInstalled: tsCli.installed || tailscale.length > 0 };
 }
 
 function normalizeWindowsPath(rawPath) {

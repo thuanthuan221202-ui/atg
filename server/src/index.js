@@ -345,10 +345,10 @@ async function main() {
   }
 
   server.listen(config.port, config.host, () => {
-    const { lan, tailscale } = getNetworkAddresses();
-    const primaryIp = (lan[0] && lan[0].ip) || (tailscale[0] && tailscale[0].ip) || '127.0.0.1';
-    const primaryUrl = `http://${primaryIp}:${config.port}`;
-    const pairUri = `agyr://connect?url=${encodeURIComponent(primaryUrl)}&token=${encodeURIComponent(config.token)}&name=${encodeURIComponent(os.hostname())}`;
+    const { lan, tailscale, tailscaleInstalled } = getNetworkAddresses();
+    const lanIp = lan[0] && lan[0].ip;
+    const tsIp = tailscale[0] && tailscale[0].ip;
+    const fallbackUrl = `http://${tsIp || lanIp || '127.0.0.1'}:${config.port}`;
 
     console.log('\n==============================================================');
     console.log('  Antigravity iOS Remote Bridge is RUNNING');
@@ -357,24 +357,39 @@ async function main() {
     console.log(`  Default Folder: ${config.defaultCwd}`);
     console.log(`  Auth Token    : ${config.token}`);
     console.log('');
+    if (tailscale.length) {
+      console.log('  [4G/5G + Wi-Fi] Tailscale URLs:');
+      for (const n of tailscale) {
+        console.log(`    - http://${n.ip}:${config.port}  (${n.name})`);
+      }
+    } else if (tailscaleInstalled) {
+      console.log('  [Tailscale] Da cai dat nhung chua dang nhap.');
+      console.log('              Hay mo Tailscale o khay he thong Windows va Sign in!');
+    }
     if (lan.length) {
-      console.log('  Wi-Fi / LAN URLs (use on same Wi-Fi):');
+      console.log('  [Wi-Fi LAN] Local URLs:');
       for (const n of lan) {
         console.log(`    - http://${n.ip}:${config.port}  (${n.name})`);
       }
     }
-    if (tailscale.length) {
-      console.log('  Tailscale URLs (use anywhere on 4G/5G):');
-      for (const n of tailscale) {
-        console.log(`    - http://${n.ip}:${config.port}  (${n.name})`);
-      }
+
+    if (tsIp) {
+      const tsUrl = `http://${tsIp}:${config.port}`;
+      const tsPair = `agyr://connect?url=${encodeURIComponent(tsUrl)}&token=${encodeURIComponent(config.token)}&name=${encodeURIComponent(os.hostname() + ' (Tailscale 4G)')}`;
+      console.log('\n  --- QR #1: TAILSCALE (Dung moi noi qua 4G/5G & Wi-Fi) ---');
+      console.log(`  URI: ${tsPair}\n`);
+      qrcode.generate(tsPair, { small: true });
     }
-    console.log('');
-    console.log('  Scan this QR code inside Antigravity Remote iOS App:');
-    console.log(`  Pairing URI: ${pairUri}`);
-    console.log('');
-    qrcode.generate(pairUri, { small: true });
-    console.log(`  iOS 16.1 Safari Backup Web UI: ${primaryUrl}/?token=${config.token}`);
+
+    if (lanIp) {
+      const lanUrl = `http://${lanIp}:${config.port}`;
+      const lanPair = `agyr://connect?url=${encodeURIComponent(lanUrl)}&token=${encodeURIComponent(config.token)}&name=${encodeURIComponent(os.hostname() + ' (Wi-Fi)')}`;
+      console.log(`\n  --- QR ${tsIp ? '#2' : '#1'}: WI-FI LAN (Cung mang Wi-Fi) ---`);
+      console.log(`  URI: ${lanPair}\n`);
+      qrcode.generate(lanPair, { small: true });
+    }
+
+    console.log(`  iOS 16.1 Safari Backup Web UI: ${fallbackUrl}/?token=${config.token}`);
     console.log('==============================================================\n');
   });
 }

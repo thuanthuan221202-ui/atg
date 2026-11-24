@@ -23,7 +23,10 @@
    - **Mã QR ghép nối** để quét từ app iPhone
    - **Link Web UI dự phòng iOS 16.1** (mở trực tiếp trên Safari iPhone là chạy ngay không bị đen!)
 
-> **Điều khiển từ xa qua 4G/5G (không cần cùng Wi-Fi):** Cài **Tailscale** (miễn phí) trên cả Windows và iPhone (hỗ trợ iOS 16.1), đăng nhập cùng tài khoản Tailscale → dùng địa chỉ `http://100.x.x.x:8787` để lưu thêm 1 profile thứ hai trong app.
+> **Điều khiển từ xa qua 4G/5G (không cần cùng Wi-Fi):**
+> 1. Cài **Tailscale** trên Windows (hoặc mở biểu tượng Tailscale ở khay hệ thống và **Sign in**) và cài **Tailscale** trên iPhone (hỗ trợ iOS 16.0+), đăng nhập **cùng 1 tài khoản**.
+> 2. Chạy [allow-firewall.bat](server/allow-firewall.bat) (mở cổng 8787) và [enable-autostart.bat](server/enable-autostart.bat) (tự chạy ngầm Bridge khi mở máy).
+> 3. Chạy [show-qr.bat](server/show-qr.bat) — sẽ hiện sẵn **2 mã QR**: mã **Tailscale 4G/5G (`http://100.x.x.x:8787`)** và mã **Wi-Fi LAN**. Quét mã Tailscale trong app iPhone là điều khiển được ở bất kỳ đâu!
 
 ---
 
