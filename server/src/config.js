@@ -95,13 +95,15 @@ function getNetworkAddresses() {
     for (const addr of addrs) {
       if (addr.family !== 'IPv4' || addr.internal) continue;
       const ip = addr.address;
-      const isTailscale = name.toLowerCase().includes('tailscale') || /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(ip);
-      if (isTailscale) {
+      // Ignore unroutable Windows link-local APIPA addresses (169.254.x.x)
+      if (ip.startsWith('169.254.')) continue;
+      const isTailscaleIp = /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(ip);
+      if (isTailscaleIp) {
         if (!seenTs.has(ip)) {
           seenTs.add(ip);
           tailscale.push({ name, ip });
         }
-      } else {
+      } else if (!name.toLowerCase().includes('tailscale')) {
         lan.push({ name, ip });
       }
     }
