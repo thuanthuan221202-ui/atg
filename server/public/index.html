@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Antigravity">
+  <title>Antigravity Remote (iOS 16 Ready)</title>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; padding: 0; height: 100%; width: 100%;
+      background: #0b0e14; color: #e8edf5;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      font-size: 15px; line-height: 1.45;
+      overflow: hidden;
+    }
+    .app {
+      display: flex; flex-direction: column;
+      height: 100%; height: -webkit-fill-available;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; background: #121722; border-bottom: 1px solid #232b3d;
+      flex-shrink: 0;
+    }
+    .title-wrap { min-width: 0; flex: 1; margin-right: 10px; }
+    .title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sub { font-size: 12px; color: #8c9ab5; display: flex; align-items: center; gap: 6px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; display: inline-block; }
+    .dot.ok { background: #22c55e; }
+    .btn {
+      background: #1d2536; color: #e8edf5; border: 1px solid #2e3a54;
+      border-radius: 10px; padding: 7px 11px; font-size: 13px; font-weight: 600;
+    }
+    .btn.primary { background: #2563eb; border-color: #3b82f6; color: #fff; }
+    .btn.danger { background: #dc2626; border-color: #ef4444; color: #fff; }
+    .btn.green { background: #16a34a; border-color: #22c55e; color: #fff; }
+    .messages {
+      flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding: 14px; display: flex; flex-direction: column; gap: 12px;
+    }
+    .bubble {
+      max-width: 92%; padding: 11px 14px; border-radius: 16px;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .bubble.user { align-self: flex-end; background: #1d4ed8; color: #fff; border-bottom-right-radius: 4px; }
+    .bubble.assistant { align-self: flex-start; background: #151b28; border: 1px solid #242e42; border-bottom-left-radius: 4px; width: 100%; }
+    .thought {
+      font-size: 12px; color: #94a3b8; background: #0f1420; border: 1px solid #222b3e;
+      border-radius: 10px; padding: 8px 10px; margin-bottom: 8px;
+    }
+    .tool {
+      font-size: 12px; background: #0f172a; border: 1px solid #25344f;
+      border-radius: 10px; padding: 8px 10px; margin: 6px 0;
+    }
+    .tool-head { display: flex; justify-content: space-between; font-weight: 600; color: #7dd3fc; }
+    .tool pre {
+      margin: 6px 0 0; padding: 6px; background: #070b12; border-radius: 6px;
+      overflow-x: auto; font-size: 11px; color: #cbd5e1; white-space: pre-wrap;
+    }
+    .perm-banner {
+      background: #23190b; border-top: 2px solid #f59e0b; padding: 12px 14px; flex-shrink: 0;
+    }
+    .perm-title { font-weight: 700; color: #fbbf24; margin-bottom: 4px; font-size: 14px; }
+    .perm-cmd {
+      background: #0b0e14; padding: 8px; border-radius: 8px; font-family: monospace;
+      font-size: 12px; margin-bottom: 10px; max-height: 110px; overflow: auto;
+    }
+    .perm-actions { display: flex; gap: 8px; }
+    .perm-actions .btn { flex: 1; padding: 10px; font-size: 14px; }
+    .composer {
+      display: flex; gap: 8px; align-items: flex-end;
+      padding: 10px 12px; background: #121722; border-top: 1px solid #232b3d; flex-shrink: 0;
+    }
+    .composer textarea {
+      flex: 1; min-height: 40px; max-height: 120px; resize: none;
+      background: #0b0e14; color: #fff; border: 1px solid #2d3850;
+      border-radius: 12px; padding: 9px 12px; font-size: 15px; font-family: inherit;
+    }
+    .modal-bg {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+      display: none; align-items: flex-end; justify-content: center; z-index: 99;
+    }
+    .modal-bg.open { display: flex; }
+    .modal {
+      width: 100%; max-height: 82%; overflow-y: auto;
+      background: #121722; border-top: 1px solid #2c3852;
+      border-radius: 18px 18px 0 0; padding: 16px;
+      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+    .field { margin-bottom: 12px; }
+    .field label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+    .field select, .field input {
+      width: 100%; background: #0b0e14; color: #fff; border: 1px solid #2e3b56;
+      border-radius: 10px; padding: 10px; font-size: 14px;
+    }
+    .sess-item {
+      padding: 10px; background: #182032; border: 1px solid #26324a;
+      border-radius: 10px; margin-bottom: 8px;
+    }
+    .sess-item.active { border-color: #3b82f6; background: #172554; }
+    .sess-title { font-weight: 600; font-size: 14px; }
+    .sess-cwd { font-size: 11px; color: #94a3b8; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="title-wrap">
+        <div class="title" id="chatTitle">Antigravity Remote</div>
+        <div class="sub"><span class="dot" id="statusDot"></span><span id="statusText">Connecting...</span></div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn" id="btnNew">+ Mới</button>
+        <button class="btn" id="btnMenu">Menu</button>
+      </div>
+    </div>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="perm-banner" id="permBanner" style="display:none;">
+      <div class="perm-title" id="permTitle">Yêu cầu cấp quyền</div>
+      <div class="perm-cmd" id="permCmd"></div>
+      <div class="perm-actions" id="permActions"></div>
+    </div>
+
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="Nhắn lệnh cho Antigravity..."></textarea>
+      <button class="btn primary" id="btnSend">Gửi</button>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="menuModal">
+    <div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <strong style="font-size:16px;">Phiên & Cấu hình</strong>
+        <button class="btn" id="btnCloseMenu">Đóng</button>
+      </div>
+      <div class="field">
+        <label>Auth Token</label>
+        <div style="display:flex;gap:6px;">
+          <input id="tokenInput" type="password" placeholder="Dán token từ máy tính">
+          <button class="btn primary" id="btnSaveToken">Kết nối</button>
+        </div>
+      </div>
+      <div id="configWrap"></div>
+      <div class="field">
+        <label>Tạo phiên mới tại thư mục Windows</label>
+        <div style="display:flex;gap:6px;">
+          <input id="cwdInput" type="text" placeholder="D:\Downloads">
+          <button class="btn primary" id="btnCreateCwd">Tạo</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Cuộc trò chuyện gần đây</label>
+        <div id="sessionList"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var token = params.get('token') || localStorage.getItem('agy_token') || '';
+      if (params.get('token')) localStorage.setItem('agy_token', token);
+
+      var ws = null;
+      var state = {
+        sessionId: null,
+        cwd: '',
+        title: 'Antigravity Remote',
+        messages: [],
+        sessions: [],
+        configOptions: [],
+        pendingPermissions: [],
+        isGenerating: false
+      };
+
+      var els = {
+        chatTitle: document.getElementById('chatTitle'),
+        statusDot: document.getElementById('statusDot'),
+        statusText: document.getElementById('statusText'),
+        messages: document.getElementById('messages'),
+        permBanner: document.getElementById('permBanner'),
+        permTitle: document.getElementById('permTitle'),
+        permCmd: document.getElementById('permCmd'),
+        permActions: document.getElementById('permActions'),
+        input: document.getElementById('input'),
+        btnSend: document.getElementById('btnSend'),
+        btnNew: document.getElementById('btnNew'),
+        btnMenu: document.getElementById('btnMenu'),
+        btnCloseMenu: document.getElementById('btnCloseMenu'),
+        menuModal: document.getElementById('menuModal'),
+        tokenInput: document.getElementById('tokenInput'),
+        btnSaveToken: document.getElementById('btnSaveToken'),
+        configWrap: document.getElementById('configWrap'),
+        cwdInput: document.getElementById('cwdInput'),
+        btnCreateCwd: document.getElementById('btnCreateCwd'),
+        sessionList: document.getElementById('sessionList')
+      };
+
+      els.tokenInput.value = token;
+
+      function setStatus(ok, txt) {
+        els.statusDot.className = ok ? 'dot ok' : 'dot';
+        els.statusText.textContent = txt;
+      }
+
+      function renderMessages() {
+        els.chatTitle.textContent = state.title || 'Antigravity Remote';
+        var html = '';
+        for (var i = 0; i < state.messages.length; i++) {
+          var m = state.messages[i];
+          if (m.role === 'user') {
+            html += '<div class="bubble user">' + esc(m.text) + '</div>';
+          } else {
+            html += '<div class="bubble assistant">';
+            if (m.thought) {
+              html += '<details class="thought"><summary>Suy luận</summary><div style="margin-top:6px;">' + esc(m.thought) + '</div></details>';
+            }
+            if (m.toolCalls && m.toolCalls.length) {
+              for (var j = 0; j < m.toolCalls.length; j++) {
+                var tc = m.toolCalls[j];
+                html += '<div class="tool"><div class="tool-head"><span>' + esc(tc.title || tc.name) + '</span><span>' + esc(tc.status) + '</span></div>';
+                if (tc.inputSummary) html += '<pre>' + esc(tc.inputSummary) + '</pre>';
+                if (tc.outputText) html += '<pre>' + esc(tc.outputText.slice(0, 800)) + '</pre>';
+                html += '</div>';
+              }
+            }
+            html += '<div>' + esc(m.text || (m.streaming ? '...' : '')) + '</div></div>';
+          }
+        }
+        els.messages.innerHTML = html;
+        els.messages.scrollTop = els.messages.scrollHeight;
+        els.btnSend.textContent = state.isGenerating ? 'Dừng' : 'Gửi';
+        els.btnSend.className = state.isGenerating ? 'btn danger' : 'btn primary';
+      }
+
+      function renderPermissions() {
+        if (!state.pendingPermissions.length) {
+          els.permBanner.style.display = 'none';
+          return;
+        }
+        var p = state.pendingPermissions[0];
+        els.permBanner.style.display = 'block';
+        els.permTitle.textContent = 'Cần duyệt: ' + (p.toolCall.title || p.toolCall.name);
+        els.permCmd.textContent = p.toolCall.inputSummary || p.toolCall.name;
+        els.permActions.innerHTML = '';
+        for (var i = 0; i < p.options.length; i++) {
+          (function (opt) {
+            var b = document.createElement('button');
+            b.className = opt.kind.indexOf('reject') >= 0 ? 'btn danger' : 'btn green';
+            b.textContent = opt.name;
+            b.onclick = function () {
+              send({ type: 'permission_response', requestId: p.requestId, optionId: opt.optionId, cancelled: false });
+            };
+            els.permActions.appendChild(b);
+          })(p.options[i]);
+        }
+      }
+
+      function renderMenu() {
+        els.cwdInput.value = state.cwd || '';
+        els.configWrap.innerHTML = '';
+        for (var i = 0; i < state.configOptions.length; i++) {
+          (function (cfg) {
+            var div = document.createElement('div');
+            div.className = 'field';
+            var lbl = document.createElement('label');
+            lbl.textContent = cfg.name;
+            var sel = document.createElement('select');
+            for (var j = 0; j < (cfg.options || []).length; j++) {
+              var o = cfg.options[j];
+              var op = document.createElement('option');
+              op.value = o.value;
+              op.textContent = o.name;
+              if (o.value === cfg.currentValue) op.selected = true;
+              sel.appendChild(op);
+            }
+            sel.onchange = function () {
+              send({ type: 'set_config', sessionId: state.sessionId, configId: cfg.id, value: sel.value });
+            };
+            div.appendChild(lbl);
+            div.appendChild(sel);
+            els.configWrap.appendChild(div);
+          })(state.configOptions[i]);
+        }
+
+        els.sessionList.innerHTML = '';
+        for (var k = 0; k < state.sessions.length; k++) {
+          (function (s) {
+            var item = document.createElement('div');
+            item.className = 'sess-item' + (s.sessionId === state.sessionId ? ' active' : '');
+            item.innerHTML = '<div class="sess-title">' + esc(s.title) + '</div><div class="sess-cwd">' + esc(s.cwd) + '</div>';
+            item.onclick = function () {
+              send({ type: 'load_session', sessionId: s.sessionId, cwd: s.cwd });
+              els.menuModal.className = 'modal-bg';
+            };
+            els.sessionList.appendChild(item);
+          })(state.sessions[k]);
+        }
+      }
+
+      function esc(str) {
+        return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      function send(obj) {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+      }
+
+      function ensureAssistant() {
+        var last = state.messages[state.messages.length - 1];
+        if (last && last.role === 'assistant' && last.streaming) return last;
+        var m = { role: 'assistant', text: '', thought: '', toolCalls: [], streaming: true };
+        state.messages.push(m);
+        return m;
+      }
+
+      function connect() {
+        if (!token) {
+          setStatus(false, 'Cần nhập Token trong Menu');
+          els.menuModal.className = 'modal-bg open';
+          return;
+        }
+        var proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        var url = proto + window.location.host + '/ws?token=' + encodeURIComponent(token);
+        setStatus(false, 'Đang kết nối...');
+        ws = new WebSocket(url);
+        ws.onopen = function () { setStatus(true, 'Đã kết nối PC'); };
+        ws.onclose = function () {
+          setStatus(false, 'Mất kết nối — thử lại...');
+          setTimeout(connect, 2500);
+        };
+        ws.onmessage = function (ev) {
+          var msg = JSON.parse(ev.data);
+          if (msg.type === 'hello') {
+            state.sessionId = msg.activeSessionId;
+            state.cwd = msg.activeCwd || msg.defaultCwd || '';
+            state.title = msg.activeTitle || 'Antigravity';
+            state.messages = msg.messages || [];
+            state.sessions = msg.sessions || [];
+            state.configOptions = msg.configOptions || [];
+            state.pendingPermissions = msg.pendingPermissions || [];
+            state.isGenerating = Boolean(msg.isGenerating);
+            setStatus(true, (msg.host || 'PC') + ' • ' + (state.cwd || ''));
+            renderMessages(); renderPermissions(); renderMenu();
+          } else if (msg.type === 'session_ready') {
+            state.sessionId = msg.sessionId;
+            state.cwd = msg.cwd || state.cwd;
+            state.title = msg.title || 'New Chat';
+            state.messages = msg.messages || [];
+            state.configOptions = msg.configOptions || [];
+            state.isGenerating = Boolean(msg.isGenerating);
+            renderMessages(); renderMenu();
+          } else if (msg.type === 'sessions_list') {
+            state.sessions = msg.sessions || [];
+            renderMenu();
+          } else if (msg.type === 'message_chunk') {
+            if (msg.sessionId !== state.sessionId) return;
+            if (msg.role === 'user') return;
+            var a = ensureAssistant();
+            if (msg.role === 'thought') a.thought += msg.text;
+            else a.text += msg.text;
+            renderMessages();
+          } else if (msg.type === 'tool_call') {
+            if (msg.sessionId !== state.sessionId) return;
+            var ast = ensureAssistant();
+            var found = false;
+            for (var i = 0; i < ast.toolCalls.length; i++) {
+              if (ast.toolCalls[i].toolCallId === msg.toolCall.toolCallId) {
+                ast.toolCalls[i] = msg.toolCall; found = true; break;
+              }
+            }
+            if (!found) ast.toolCalls.push(msg.toolCall);
+            renderMessages();
+          } else if (msg.type === 'session_meta') {
+            if (msg.sessionId !== state.sessionId) return;
+            if (msg.title) state.title = msg.title;
+            if (msg.configOptions) state.configOptions = msg.configOptions;
+            renderMessages(); renderMenu();
+          } else if (msg.type === 'permission_request') {
+            state.pendingPermissions.push(msg);
+            renderPermissions();
+          } else if (msg.type === 'permission_resolved') {
+            state.pendingPermissions = state.pendingPermissions.filter(function (x) { return x.requestId !== msg.requestId; });
+            renderPermissions();
+          } else if (msg.type === 'turn_started') {
+            if (msg.sessionId === state.sessionId) { state.isGenerating = true; renderMessages(); }
+          } else if (msg.type === 'turn_finished') {
+            if (msg.sessionId === state.sessionId) {
+              state.isGenerating = false;
+              for (var m = 0; m < state.messages.length; m++) state.messages[m].streaming = false;
+              renderMessages();
+            }
+          } else if (msg.type === 'error') {
+            state.messages.push({ role: 'assistant', text: '⚠️ ' + msg.message, thought: '', toolCalls: [], streaming: false });
+            renderMessages();
+          }
+        };
+      }
+
+      els.btnSend.onclick = function () {
+        if (state.isGenerating) {
+          send({ type: 'cancel', sessionId: state.sessionId });
+          return;
+        }
+        var txt = els.input.value.trim();
+        if (!txt) return;
+        els.input.value = '';
+        state.messages.push({ role: 'user', text: txt, thought: '', toolCalls: [], streaming: false });
+        renderMessages();
+        send({ type: 'prompt', sessionId: state.sessionId, text: txt, images: [] });
+      };
+
+      els.btnNew.onclick = function () {
+        send({ type: 'new_session', cwd: state.cwd });
+      };
+      els.btnMenu.onclick = function () {
+        send({ type: 'list_sessions' });
+        els.menuModal.className = 'modal-bg open';
+      };
+      els.btnCloseMenu.onclick = function () { els.menuModal.className = 'modal-bg'; };
+      els.btnSaveToken.onclick = function () {
+        token = els.tokenInput.value.trim();
+        localStorage.setItem('agy_token', token);
+        els.menuModal.className = 'modal-bg';
+        if (ws) ws.close();
+        connect();
+      };
+      els.btnCreateCwd.onclick = function () {
+        var cwd = els.cwdInput.value.trim();
+        send({ type: 'new_session', cwd: cwd });
+        els.menuModal.className = 'modal-bg';
+      };
+
+      connect();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+name: Build AntigravityRemote IPA (iOS 16+)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build iOS Release (.app for ARM64 iPhone)
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project AntigravityRemote.xcodeproj \
+            -scheme AntigravityRemote \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Ad-hoc sign and package .ipa (TrollStore & Sideloadly ready)
+        working-directory: ios
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/DerivedData/Build/Products/Release-iphoneos/AntigravityRemote.app build/ipa/Payload/
+          codesign --force --deep --sign - build/ipa/Payload/AntigravityRemote.app
+          cd build/ipa
+          zip -qry ../AntigravityRemote-iOS16.ipa Payload
+          ls -lh ../AntigravityRemote-iOS16.ipa
+
+      - name: Upload AntigravityRemote-iOS16.ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AntigravityRemote-iOS16-IPA
+          path: ios/build/AntigravityRemote-iOS16.ipa
+          retention-days: 30
+
+      - name: Publish direct .ipa to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" ios/build/AntigravityRemote-iOS16.ipa \
+            --title "Antigravity Remote iOS 16 ($TAG)" \
+            --notes "File .ipa gốc (ARM64, tối thiểu iOS 16.0) dùng điều khiển Antigravity trên máy tính Windows. Cài trực tiếp bằng TrollStore (vĩnh viễn trên iOS 16.1) hoặc Sideloadly / SideStore." \
+            --latest

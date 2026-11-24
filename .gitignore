@@ -1,0 +1,9 @@
+node_modules/
+server/bridge-config.json
+server/logs/
+ios/*.xcodeproj
+ios/build/
+ios/DerivedData/
+*.ipa
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+{
+  "name": "antigravity-ios-bridge",
+  "version": "1.0.0",
+  "description": "Local ACP Bridge Server allowing Antigravity Remote iOS (.ipa) to control Antigravity on Windows",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  }
+}
