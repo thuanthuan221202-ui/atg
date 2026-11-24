@@ -200,6 +200,33 @@ struct DirectoryEntry: Identifiable, Codable, Equatable {
     var name: String
     var path: String
     var isDirectory: Bool
+    var size: Int?
+    var mtimeMs: Double?
+    var ext: String?
+    var previewKind: String?
+
+    var formattedSize: String {
+        guard let bytes = size, !isDirectory else { return "" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    var formattedDate: String {
+        guard let ms = mtimeMs, ms > 0 else { return "" }
+        let date = Date(timeIntervalSince1970: ms / 1000.0)
+        let fmt = RelativeDateTimeFormatter()
+        fmt.unitsStyle = .abbreviated
+        return fmt.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct FileReadResponse: Codable {
+    var path: String
+    var name: String
+    var ext: String
+    var size: Int
+    var mtimeMs: Double?
+    var truncated: Bool
+    var content: String
 }
 
 struct DirectoryListing: Codable {

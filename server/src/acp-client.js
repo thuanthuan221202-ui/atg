@@ -492,28 +492,35 @@ class AcpClient extends EventEmitter {
     const state = this._getOrCreateSessionState(sessionId, validCwd);
     state.messages = [];
     state.cwd = validCwd;
-    this.activeSessionId = sessionId;
     this.loadingSessions.add(sessionId);
 
     let res;
     try {
-      try {
-        res = await this.request('session/load', {
-          sessionId,
-          cwd: validCwd,
-          mcpServers: []
-        });
-      } catch (loadErr) {
-        // Fallback to session/resume if load is rejected
-        res = await this.request('session/resume', {
-          sessionId,
-          cwd: validCwd,
-          mcpServers: []
-        });
-      }
+      res = await this.request('session/load', {
+        sessionId,
+        cwd: validCwd,
+        mcpServers: []
+      });
+    } catch (loadErr) {
+      this.loadingSessions.delete(sessionId);
+      // Desktop GUI App conversations cannot be resumed directly by agy acp (-32002).
+      // Start a clean ACP session in the exact same workspace folder instead of failing on prompt!
+      const fresh = await this.newSession(validCwd);
+      fresh.messages.push({
+        id: `sys_${Date.now()}`,
+        role: 'assistant',
+        text: `ℹ️ Cuộc trò chuyện cũ này thuộc cửa sổ **Antigravity Desktop App** nên không thể nối trực tiếp từ \`agy acp\`. Đã tự động mở **phiên mới** tại cùng thư mục \`${fresh.cwd}\` để bạn điều khiển ngay!`,
+        thought: '',
+        toolCalls: [],
+        streaming: false,
+        timestamp: Date.now()
+      });
+      return fresh;
     } finally {
       this.loadingSessions.delete(sessionId);
     }
+
+    this.activeSessionId = sessionId;
 
     // Finalize replayed messages
     for (const m of state.messages) {
@@ -574,10 +581,54 @@ class AcpClient extends EventEmitter {
     this.emit('turn_started', { sessionId: sid });
 
     try {
-      const res = await this.request('session/prompt', {
-        sessionId: sid,
-        prompt: promptBlocks
-      });
+      let res;
+      try {
+        res = await this.request('session/prompt', {
+          sessionId: sid,
+          prompt: promptBlocks
+        });
+      } catch (promptErr) {
+        // Auto-recover if a stale/Desktop trajectory is no longer available in agy acp
+        if (/trajectory not found|session not found/i.test(promptErr.message || '')) {
+          console.warn(`[acp] Stale session ${sid}, auto-creating fresh session in ${state.cwd}`);
+          const fresh = await this.newSession(state.cwd);
+          sid = fresh.sessionId;
+          fresh.messages.push({
+            id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            role: 'user',
+            text: text ? text.trim() : '[Image]',
+            thought: '',
+            toolCalls: [],
+            imageCount: Array.isArray(images) ? images.length : 0,
+            streaming: false,
+            timestamp: Date.now()
+          });
+          fresh.isGenerating = true;
+          this.emit('session_ready', {
+            sessionId: fresh.sessionId,
+            cwd: fresh.cwd,
+            title: fresh.title,
+            configOptions: fresh.configOptions,
+            availableCommands: fresh.availableCommands,
+            messages: fresh.messages,
+            usage: fresh.usage,
+            isGenerating: true
+          });
+          res = await this.request('session/prompt', {
+            sessionId: sid,
+            prompt: promptBlocks
+          });
+          fresh.isGenerating = false;
+          for (const m of fresh.messages) m.streaming = false;
+          this.emit('turn_finished', {
+            sessionId: sid,
+            stopReason: (res && res.stopReason) || 'end_turn',
+            usage: (res && res.usage) || null
+          });
+          return res;
+        }
+        throw promptErr;
+      }
       state.isGenerating = false;
       for (const m of state.messages) m.streaming = false;
       this.emit('turn_finished', {

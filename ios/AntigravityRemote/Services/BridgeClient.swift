@@ -404,6 +404,79 @@ final class BridgeClient: ObservableObject {
         return try JSONDecoder().decode(DirectoryListing.self, from: data)
     }
 
+    func browseRemoteDirectory(path: String?, sortBy: String = "recent") async throws -> DirectoryListing {
+        guard let profile = currentProfile else {
+            throw NSError(domain: "Bridge", code: -1, userInfo: [NSLocalizedDescriptionKey: "Chưa kết nối máy tính"])
+        }
+        let normalized = PairingParser.normalizeBaseURL(profile.baseURL)
+        guard var comps = URLComponents(string: normalized + "/api/fs/browse") else {
+            throw NSError(domain: "Bridge", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+        var items = [URLQueryItem(name: "sort", value: sortBy)]
+        if let path = path, !path.isEmpty {
+            items.append(URLQueryItem(name: "path", value: path))
+        }
+        comps.queryItems = items
+        guard let url = comps.url else {
+            throw NSError(domain: "Bridge", code: -3, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 12
+        req.setValue("Bearer \(profile.token)", forHTTPHeaderField: "Authorization")
+
+        let (data, resp) = try await urlSession.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NSError(domain: "Bridge", code: -4, userInfo: [NSLocalizedDescriptionKey: "Không thể duyệt tệp trên PC (hãy cập nhật Bridge Server trên PC)"])
+        }
+        return try JSONDecoder().decode(DirectoryListing.self, from: data)
+    }
+
+    func readRemoteFile(path: String) async throws -> FileReadResponse {
+        guard let profile = currentProfile else {
+            throw NSError(domain: "Bridge", code: -1, userInfo: [NSLocalizedDescriptionKey: "Chưa kết nối máy tính"])
+        }
+        let normalized = PairingParser.normalizeBaseURL(profile.baseURL)
+        guard var comps = URLComponents(string: normalized + "/api/fs/read") else {
+            throw NSError(domain: "Bridge", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+        comps.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = comps.url else {
+            throw NSError(domain: "Bridge", code: -3, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(profile.token)", forHTTPHeaderField: "Authorization")
+
+        let (data, resp) = try await urlSession.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NSError(domain: "Bridge", code: -4, userInfo: [NSLocalizedDescriptionKey: "Không thể đọc nội dung tệp"])
+        }
+        return try JSONDecoder().decode(FileReadResponse.self, from: data)
+    }
+
+    func downloadRemoteFileData(path: String) async throws -> Data {
+        guard let profile = currentProfile else {
+            throw NSError(domain: "Bridge", code: -1, userInfo: [NSLocalizedDescriptionKey: "Chưa kết nối máy tính"])
+        }
+        let normalized = PairingParser.normalizeBaseURL(profile.baseURL)
+        guard var comps = URLComponents(string: normalized + "/api/fs/raw") else {
+            throw NSError(domain: "Bridge", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+        comps.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = comps.url else {
+            throw NSError(domain: "Bridge", code: -3, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 45
+        req.setValue("Bearer \(profile.token)", forHTTPHeaderField: "Authorization")
+
+        let (data, resp) = try await urlSession.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NSError(domain: "Bridge", code: -4, userInfo: [NSLocalizedDescriptionKey: "Không thể tải tệp từ PC"])
+        }
+        return data
+    }
+
     // MARK: - Incoming Event Handling
 
     private func ensureStreamingAssistantIndex() -> Int {

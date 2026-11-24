@@ -10,6 +10,7 @@ struct ChatWorkspaceView: View {
 
     @State private var draftText: String = ""
     @State private var showDrawer: Bool = false
+    @State private var showFileBrowser: Bool = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var attachedImages: [AttachedImage] = []
     @FocusState private var isInputFocused: Bool
@@ -123,7 +124,15 @@ struct ChatWorkspaceView: View {
                     }
                 }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button {
+                        showFileBrowser = true
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.body.weight(.semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+
                     Button {
                         client.createNewSession(cwd: client.activeCwd)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -136,6 +145,12 @@ struct ChatWorkspaceView: View {
             }
             .sheet(isPresented: $showDrawer) {
                 SessionDrawerView(onOpenConnections: onOpenConnections)
+            }
+            .sheet(isPresented: $showFileBrowser) {
+                FileBrowserView(initialPath: client.activeCwd.isEmpty ? client.defaultCwd : client.activeCwd) { filePath in
+                    draftText = "Xem và tóm tắt file: \(filePath)"
+                    isInputFocused = true
+                }
             }
             .onChange(of: selectedPhotoItems) { items in
                 Task { await loadSelectedPhotos(items) }

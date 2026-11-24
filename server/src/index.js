@@ -52,7 +52,49 @@ function listWindowsDrives() {
   return drives;
 }
 
-function listDirectory(rawTarget) {
+const TEXT_EXTS = new Set([
+  '.txt', '.md', '.markdown', '.json', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
+  '.swift', '.py', '.rb', '.go', '.rs', '.java', '.kt', '.c', '.cpp', '.h', '.hpp', '.cs',
+  '.html', '.htm', '.css', '.scss', '.less', '.xml', '.svg', '.plist', '.yaml', '.yml',
+  '.toml', '.ini', '.cfg', '.conf', '.env', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
+  '.vbs', '.sql', '.csv', '.tsv', '.log', '.gitignore', '.dockerfile', '.gradle', '.pbxproj'
+]);
+
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.ico']);
+
+function getPreviewKind(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  if (TEXT_EXTS.has(ext) || filename.toLowerCase() === 'dockerfile' || filename.toLowerCase() === 'makefile' || filename.toLowerCase() === 'readme') {
+    return 'text';
+  }
+  return 'binary';
+}
+
+function getMimeType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  const map = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.pdf': 'application/pdf',
+    '.html': 'text/html; charset=utf-8',
+    '.htm': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.txt': 'text/plain; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.zip': 'application/zip',
+    '.ipa': 'application/octet-stream'
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+function listDirectory(rawTarget, includeFiles = false, sortBy = 'name') {
   const drives = process.platform === 'win32' ? listWindowsDrives() : ['/'];
   let target = normalizeWindowsPath(rawTarget || config.defaultCwd);
   if (!target || !fs.existsSync(target)) {
@@ -67,15 +109,37 @@ function listDirectory(rawTarget) {
     const items = fs.readdirSync(resolved, { withFileTypes: true });
     for (const item of items) {
       if (item.name.startsWith('$') || item.name === 'System Volume Information') continue;
-      if (item.isDirectory()) {
-        entries.push({
-          name: item.name,
-          path: path.join(resolved, item.name),
-          isDirectory: true
-        });
-      }
+      const isDir = item.isDirectory();
+      if (!isDir && !includeFiles) continue;
+      const fullPath = path.join(resolved, item.name);
+      let size = 0;
+      let mtimeMs = 0;
+      try {
+        const st = fs.statSync(fullPath);
+        size = isDir ? 0 : st.size;
+        mtimeMs = st.mtimeMs;
+      } catch (_) {}
+      entries.push({
+        name: item.name,
+        path: fullPath,
+        isDirectory: isDir,
+        size,
+        mtimeMs,
+        ext: isDir ? '' : path.extname(item.name).toLowerCase(),
+        previewKind: isDir ? 'folder' : getPreviewKind(item.name)
+      });
     }
-    entries.sort((a, b) => a.name.localeCompare(b.name));
+    if (sortBy === 'recent') {
+      entries.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? 1 : -1; // Show newest files first!
+        return (b.mtimeMs || 0) - (a.mtimeMs || 0);
+      });
+    } else {
+      entries.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
   } catch (err) {
     return { path: resolved, parent, drives, entries: [], error: err.message };
   }
@@ -141,7 +205,68 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/fs/list') {
     const dir = urlObj.searchParams.get('path') || config.defaultCwd;
-    return sendJson(res, 200, listDirectory(dir));
+    return sendJson(res, 200, listDirectory(dir, false, 'name'));
+  }
+
+  if (pathname === '/api/fs/browse') {
+    const dir = urlObj.searchParams.get('path') || config.defaultCwd;
+    const sortBy = urlObj.searchParams.get('sort') === 'recent' ? 'recent' : 'name';
+    return sendJson(res, 200, listDirectory(dir, true, sortBy));
+  }
+
+  if (pathname === '/api/fs/read') {
+    const rawPath = urlObj.searchParams.get('path') || '';
+    const filePath = normalizeWindowsPath(rawPath);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return sendJson(res, 404, { error: 'File not found' });
+    }
+    try {
+      const st = fs.statSync(filePath);
+      if (st.isDirectory()) return sendJson(res, 400, { error: 'Path is a directory' });
+      const maxBytes = 512 * 1024;
+      const truncated = st.size > maxBytes;
+      const fd = fs.openSync(filePath, 'r');
+      const buf = Buffer.alloc(Math.min(st.size, maxBytes));
+      fs.readSync(fd, buf, 0, buf.length, 0);
+      fs.closeSync(fd);
+      return sendJson(res, 200, {
+        path: filePath,
+        name: path.basename(filePath),
+        ext: path.extname(filePath).toLowerCase(),
+        size: st.size,
+        mtimeMs: st.mtimeMs,
+        truncated,
+        content: buf.toString('utf8')
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  if (pathname === '/api/fs/raw') {
+    const rawPath = urlObj.searchParams.get('path') || '';
+    const filePath = normalizeWindowsPath(rawPath);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return sendJson(res, 404, { error: 'File not found' });
+    }
+    try {
+      const st = fs.statSync(filePath);
+      if (st.isDirectory()) return sendJson(res, 400, { error: 'Path is a directory' });
+      if (st.size > 100 * 1024 * 1024) {
+        return sendJson(res, 413, { error: 'File too large (>100MB)' });
+      }
+      const filename = path.basename(filePath);
+      res.writeHead(200, {
+        'Content-Type': getMimeType(filename),
+        'Content-Length': st.size,
+        'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        'Access-Control-Allow-Origin': '*'
+      });
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
   }
 
   if (pathname === '/api/sessions') {
@@ -168,6 +293,7 @@ function broadcast(payload) {
 }
 
 // Wire ACP events to all connected iOS/Web clients
+acp.on('session_ready', (data) => broadcast({ type: 'session_ready', ...data }));
 acp.on('message_chunk', (data) => broadcast({ type: 'message_chunk', ...data }));
 acp.on('tool_call', (data) => broadcast({ type: 'tool_call', ...data }));
 acp.on('session_meta', (data) => broadcast({ type: 'session_meta', ...data }));
