@@ -9,6 +9,8 @@ class AcpClient extends EventEmitter {
     super();
     this.agyBin = options.agyBin;
     this.defaultCwd = options.defaultCwd;
+    this.autoApproveAll = Boolean(options.autoApproveAll);
+    this.onAutoApproveChange = typeof options.onAutoApproveChange === 'function' ? options.onAutoApproveChange : null;
     this.proc = null;
     this.buffer = '';
     this.nextId = 1;
@@ -198,7 +200,7 @@ class AcpClient extends EventEmitter {
         cwd: normalizeWindowsPath(cwd || this.defaultCwd),
         title: 'New Chat',
         configOptions: [],
-        availableCommands: [],
+        availableCommands: this._withBridgeCommands([]),
         messages: [],
         usage: { used: 0, size: 1048576 },
         isGenerating: false
@@ -265,6 +267,89 @@ class AcpClient extends EventEmitter {
     return '';
   }
 
+  _withBridgeCommands(commands = []) {
+    const list = Array.isArray(commands) ? [...commands] : [];
+    if (!list.some((c) => c && c.name === 'auto-approve')) {
+      list.push({
+        name: 'auto-approve',
+        description: 'Bật/tắt tự động duyệt mọi lệnh (/auto-approve on | off)'
+      });
+    }
+    return list;
+  }
+
+  _pickAllowOption(options = []) {
+    return (
+      options.find((o) => String(o.kind || '').toLowerCase() === 'allow_always') ||
+      options.find((o) => !String(o.kind || '').toLowerCase().startsWith('reject')) ||
+      options[0] ||
+      null
+    );
+  }
+
+  setAutoApproveAll(enabled) {
+    this.autoApproveAll = Boolean(enabled);
+    if (this.onAutoApproveChange) {
+      this.onAutoApproveChange(this.autoApproveAll);
+    }
+    if (this.autoApproveAll && this.pendingPermissions.size > 0) {
+      for (const [reqId, entry] of Array.from(this.pendingPermissions.entries())) {
+        const allowOpt = this._pickAllowOption(entry.options);
+        if (allowOpt) {
+          this.respondPermission(reqId, allowOpt.optionId, false);
+        }
+      }
+    }
+    return this.autoApproveAll;
+  }
+
+  _handleLocalCommand(sessionId, state, text) {
+    const match = String(text || '').trim().match(/^(?:\/auto-approve|\/auto)(?:\s+(\S+))?\s*$/i);
+    if (!match) return false;
+
+    const arg = (match[1] || 'status').toLowerCase();
+    let replyText;
+
+    if (arg === 'on' || arg === 'true' || arg === '1' || arg === 'enable') {
+      this.setAutoApproveAll(true);
+      replyText = '✅ Đã **BẬT** chế độ tự động duyệt mọi lệnh (`autoApproveAll = true`).\nTừ giờ các yêu cầu chạy lệnh hoặc sửa file sẽ được Bridge Server tự động chấp nhận và đã lưu vào `bridge-config.json`.\n\nGõ `/auto-approve off` nếu muốn quay lại chế độ hỏi duyệt thủ công.';
+    } else if (arg === 'off' || arg === 'false' || arg === '0' || arg === 'disable') {
+      this.setAutoApproveAll(false);
+      replyText = '🛡️ Đã **TẮT** chế độ tự động duyệt (`autoApproveAll = false`).\nBridge Server sẽ gửi yêu cầu duyệt lệnh về iPhone như bình thường.\n\nGõ `/auto-approve on` để bật lại bất kỳ lúc nào.';
+    } else if (arg === 'status') {
+      replyText = `⚙️ Trạng thái tự động duyệt lệnh hiện tại: **${this.autoApproveAll ? 'ĐANG BẬT (ON)' : 'ĐANG TẮT (OFF)'}**.\n\nCách dùng:\n- \`/auto-approve on\` — Bật tự động duyệt mọi lệnh\n- \`/auto-approve off\` — Tắt, quay lại hỏi duyệt thủ công`;
+    } else {
+      replyText = `⚠️ Tham số không hợp lệ: \`${arg}\`.\n\nCách dùng:\n- \`/auto-approve on\` — Bật tự động duyệt mọi lệnh\n- \`/auto-approve off\` — Tắt tự động duyệt\n- \`/auto-approve\` — Xem trạng thái hiện tại`;
+    }
+
+    const now = Date.now();
+    state.messages.push({
+      id: `usr_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      role: 'user',
+      text: String(text).trim(),
+      thought: '',
+      toolCalls: [],
+      imageCount: 0,
+      streaming: false,
+      timestamp: now
+    });
+    state.messages.push({
+      id: `ast_${now + 1}_${Math.random().toString(36).slice(2, 7)}`,
+      role: 'assistant',
+      text: replyText,
+      thought: '',
+      toolCalls: [],
+      streaming: false,
+      timestamp: now + 1
+    });
+
+    this.activeSessionId = sessionId;
+    this.emit('turn_started', { sessionId });
+    this.emit('message_chunk', { sessionId, role: 'assistant', text: replyText });
+    this.emit('turn_finished', { sessionId, stopReason: 'end_turn', usage: state.usage || null });
+    return true;
+  }
+
   _handlePermissionRequest(msg) {
     const params = msg.params || {};
     const sessionId = params.sessionId || this.activeSessionId || '';
@@ -295,6 +380,19 @@ class AcpClient extends EventEmitter {
         { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
         { optionId: 'deny', name: 'Deny', kind: 'reject_once' }
       ];
+    }
+
+    if (this.autoApproveAll) {
+      const allowOpt = this._pickAllowOption(payload.options);
+      if (allowOpt) {
+        console.log(`[acp] Auto-approved "${payload.toolCall.name}" (${allowOpt.optionId})`);
+        this._sendRaw({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: { outcome: { outcome: 'selected', optionId: allowOpt.optionId } }
+        });
+        return;
+      }
     }
 
     this.pendingPermissions.set(requestId, payload);
@@ -437,10 +535,12 @@ class AcpClient extends EventEmitter {
     }
 
     if (kind === 'available_commands_update' && Array.isArray(u.availableCommands)) {
-      state.availableCommands = u.availableCommands.map((c) => ({
-        name: c.name,
-        description: c.description || ''
-      }));
+      state.availableCommands = this._withBridgeCommands(
+        u.availableCommands.map((c) => ({
+          name: c.name,
+          description: c.description || ''
+        }))
+      );
       this.emit('session_meta', { sessionId, availableCommands: state.availableCommands });
     }
   }
@@ -542,6 +642,9 @@ class AcpClient extends EventEmitter {
     }
 
     const state = this._getOrCreateSessionState(sid);
+    if ((!Array.isArray(images) || images.length === 0) && this._handleLocalCommand(sid, state, text)) {
+      return { stopReason: 'end_turn', localCommand: true };
+    }
     // Close any prior streaming bubble
     for (const m of state.messages) m.streaming = false;
 
@@ -695,7 +798,7 @@ class AcpClient extends EventEmitter {
       activeCwd: state ? state.cwd : this.defaultCwd,
       activeTitle: state ? state.title : 'New Chat',
       configOptions: state ? state.configOptions : [],
-      availableCommands: state ? state.availableCommands : [],
+      availableCommands: this._withBridgeCommands(state ? state.availableCommands : []),
       messages: state ? state.messages : [],
       usage: state ? state.usage : { used: 0, size: 1048576 },
       isGenerating: state ? state.isGenerating : false,

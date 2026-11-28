@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ChatWorkspaceView: View {
     @EnvironmentObject var client: BridgeClient
@@ -11,8 +12,12 @@ struct ChatWorkspaceView: View {
     @State private var draftText: String = ""
     @State private var showDrawer: Bool = false
     @State private var showFileBrowser: Bool = false
+    @State private var showFileImporter: Bool = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var attachedImages: [AttachedImage] = []
+    @State private var attachedFiles: [AttachedFile] = []
+    @State private var isUploadingAttachments: Bool = false
+    @State private var uploadErrorText: String?
     @FocusState private var isInputFocused: Bool
 
     private var matchingSlashCommands: [SlashCommandItem] {
@@ -79,9 +84,9 @@ struct ChatWorkspaceView: View {
                     slashSuggestionsBar
                 }
 
-                // Attached image thumbnails
-                if !attachedImages.isEmpty {
-                    attachedImagesStrip
+                // Attached images & files strip
+                if !attachedImages.isEmpty || !attachedFiles.isEmpty {
+                    attachmentsStrip
                 }
 
                 // Bottom Composer
@@ -154,6 +159,24 @@ struct ChatWorkspaceView: View {
             }
             .onChange(of: selectedPhotoItems) { items in
                 Task { await loadSelectedPhotos(items) }
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true
+            ) { result in
+                handlePickedFiles(result)
+            }
+            .alert(
+                "Lỗi tải tệp lên PC",
+                isPresented: Binding(
+                    get: { uploadErrorText != nil },
+                    set: { if !$0 { uploadErrorText = nil } }
+                )
+            ) {
+                Button("Đóng", role: .cancel) {}
+            } message: {
+                Text(uploadErrorText ?? "")
             }
         }
     }
@@ -365,7 +388,7 @@ struct ChatWorkspaceView: View {
         .background(AppTheme.surface)
     }
 
-    private var attachedImagesStrip: some View {
+    private var attachmentsStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(attachedImages) { img in
@@ -388,6 +411,41 @@ struct ChatWorkspaceView: View {
                         .offset(x: 6, y: -6)
                     }
                 }
+
+                ForEach(attachedFiles) { file in
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.fill")
+                            .font(.title3)
+                            .foregroundColor(AppTheme.cyan)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.name)
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(AppTheme.textPrimary)
+                                .lineLimit(1)
+                            Text(file.formattedSize)
+                                .font(.caption2)
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                        .frame(maxWidth: 150, alignment: .leading)
+
+                        Button {
+                            try? FileManager.default.removeItem(at: file.localURL)
+                            attachedFiles.removeAll { $0.id == file.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 17))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.card)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(AppTheme.border, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
@@ -404,12 +462,24 @@ struct ChatWorkspaceView: View {
                 matching: .images
             ) {
                 Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 19, weight: .medium))
+                    .font(.system(size: 18, weight: .medium))
                     .foregroundColor(AppTheme.textSecondary)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 36, height: 36)
                     .background(AppTheme.card)
                     .clipShape(Circle())
             }
+
+            Button {
+                showFileImporter = true
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(attachedFiles.isEmpty ? AppTheme.textSecondary : AppTheme.cyan)
+                    .frame(width: 36, height: 36)
+                    .background(AppTheme.card)
+                    .clipShape(Circle())
+            }
+            .disabled(isUploadingAttachments)
 
             TextField("Nhắn lệnh cho Antigravity...", text: $draftText, axis: .vertical)
                 .lineLimit(1...5)
@@ -436,8 +506,14 @@ struct ChatWorkspaceView: View {
                         .background(AppTheme.red)
                         .clipShape(Circle())
                 }
+            } else if isUploadingAttachments {
+                ProgressView()
+                    .tint(.white)
+                    .frame(width: 38, height: 38)
+                    .background(AppTheme.accent.opacity(0.75))
+                    .clipShape(Circle())
             } else {
-                let canSend = !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachedImages.isEmpty
+                let canSend = !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachedImages.isEmpty || !attachedFiles.isEmpty
                 Button {
                     sendCurrentMessage()
                 } label: {
@@ -463,10 +539,74 @@ struct ChatWorkspaceView: View {
     private func sendCurrentMessage() {
         let text = draftText
         let imgs = attachedImages
+        let files = attachedFiles
+        if files.isEmpty {
+            draftText = ""
+            attachedImages = []
+            selectedPhotoItems = []
+            client.sendPrompt(text: text, images: imgs)
+            return
+        }
+        Task {
+            await uploadFilesAndSend(text: text, images: imgs, files: files)
+        }
+    }
+
+    private func uploadFilesAndSend(text: String, images: [AttachedImage], files: [AttachedFile]) async {
+        isUploadingAttachments = true
+        let targetDir = client.activeCwd.isEmpty ? client.defaultCwd : client.activeCwd
+        var uploaded: [FileUploadResponse] = []
+        do {
+            for file in files {
+                let res = try await client.uploadRemoteFile(
+                    localURL: file.localURL,
+                    filename: file.name,
+                    targetDirectory: targetDir
+                )
+                uploaded.append(res)
+            }
+        } catch {
+            isUploadingAttachments = false
+            uploadErrorText = error.localizedDescription
+            return
+        }
+
+        for file in files {
+            try? FileManager.default.removeItem(at: file.localURL)
+        }
+
+        let fileLines = uploaded.map { res in
+            let sizeStr = ByteCountFormatter.string(fromByteCount: res.size, countStyle: .file)
+            return "[Tệp đã gửi lên PC: \(res.path) (\(sizeStr))]"
+        }
+        let baseText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalPrompt = baseText.isEmpty
+            ? fileLines.joined(separator: "\n")
+            : baseText + "\n\n" + fileLines.joined(separator: "\n")
+
         draftText = ""
         attachedImages = []
+        attachedFiles = []
         selectedPhotoItems = []
-        client.sendPrompt(text: text, images: imgs)
+        isUploadingAttachments = false
+        client.sendPrompt(text: finalPrompt, images: images)
+    }
+
+    private func handlePickedFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let err):
+            uploadErrorText = err.localizedDescription
+        case .success(let urls):
+            var staged: [AttachedFile] = []
+            for url in urls {
+                do {
+                    staged.append(try LocalFileStaging.copyToTemp(from: url))
+                } catch {
+                    uploadErrorText = "Không thể đọc tệp \(url.lastPathComponent): \(error.localizedDescription)"
+                }
+            }
+            attachedFiles.append(contentsOf: staged)
+        }
     }
 
     private func loadSelectedPhotos(_ items: [PhotosPickerItem]) async {

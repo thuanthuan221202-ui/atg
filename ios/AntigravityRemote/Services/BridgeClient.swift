@@ -467,7 +467,7 @@ final class BridgeClient: ObservableObject {
             throw NSError(domain: "Bridge", code: -3, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
         }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 45
+        req.timeoutInterval = 600
         req.setValue("Bearer \(profile.token)", forHTTPHeaderField: "Authorization")
 
         let (data, resp) = try await urlSession.data(for: req)
@@ -475,6 +475,43 @@ final class BridgeClient: ObservableObject {
             throw NSError(domain: "Bridge", code: -4, userInfo: [NSLocalizedDescriptionKey: "Không thể tải tệp từ PC"])
         }
         return data
+    }
+
+    func uploadRemoteFile(localURL: URL, filename: String, targetDirectory: String?) async throws -> FileUploadResponse {
+        guard let profile = currentProfile else {
+            throw NSError(domain: "Bridge", code: -1, userInfo: [NSLocalizedDescriptionKey: "Chưa kết nối máy tính"])
+        }
+        let normalized = PairingParser.normalizeBaseURL(profile.baseURL)
+        guard var comps = URLComponents(string: normalized + "/api/fs/upload") else {
+            throw NSError(domain: "Bridge", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+        var items = [URLQueryItem(name: "filename", value: filename)]
+        if let dir = targetDirectory, !dir.isEmpty {
+            items.append(URLQueryItem(name: "dir", value: dir))
+        }
+        comps.queryItems = items
+        guard let url = comps.url else {
+            throw NSError(domain: "Bridge", code: -3, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ"])
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 600
+        req.setValue("Bearer \(profile.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+
+        let (data, resp) = try await urlSession.upload(for: req, fromFile: localURL)
+        guard let http = resp as? HTTPURLResponse else {
+            throw NSError(domain: "Bridge", code: -4, userInfo: [NSLocalizedDescriptionKey: "Phản hồi máy tính không hợp lệ"])
+        }
+        guard http.statusCode == 200 else {
+            if let errJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let msg = errJson["error"] as? String {
+                throw NSError(domain: "Bridge", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            throw NSError(domain: "Bridge", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Tải tệp lên thất bại (HTTP \(http.statusCode))"])
+        }
+        return try JSONDecoder().decode(FileUploadResponse.self, from: data)
     }
 
     // MARK: - Incoming Event Handling

@@ -4,7 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
-const CONFIG_PATH = path.join(__dirname, '..', 'bridge-config.json');
+const CONFIG_PATH = process.env.BRIDGE_CONFIG_PATH || path.join(__dirname, '..', 'bridge-config.json');
 
 function findAgyBinary() {
   const candidates = [
@@ -39,7 +39,8 @@ function loadOrCreateConfig() {
     token: process.env.BRIDGE_TOKEN || saved.token || crypto.randomBytes(18).toString('base64url'),
     defaultCwd: process.env.BRIDGE_CWD || saved.defaultCwd || path.resolve(__dirname, '..', '..'),
     agyBin: process.env.AGY_BIN || saved.agyBin || findAgyBinary(),
-    autoApproveSafe: Boolean(saved.autoApproveSafe || false)
+    autoApproveSafe: Boolean(saved.autoApproveSafe || false),
+    autoApproveAll: Boolean(saved.autoApproveAll || false)
   };
 
   // Validate saved agyBin still exists if it's an absolute path
@@ -52,13 +53,19 @@ function loadOrCreateConfig() {
     config.defaultCwd = os.homedir();
   }
 
-  try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[config] Could not persist bridge-config.json:', err.message);
-  }
+  saveConfig(config);
 
   return config;
+}
+
+function saveConfig(config) {
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('[config] Could not persist bridge-config.json:', err.message);
+    return false;
+  }
 }
 
 function getTailscaleCliIp() {
@@ -165,6 +172,7 @@ function normalizeWindowsPath(rawPath) {
 module.exports = {
   CONFIG_PATH,
   loadOrCreateConfig,
+  saveConfig,
   getNetworkAddresses,
   normalizeWindowsPath
 };

@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 struct FileBrowserView: View {
     @EnvironmentObject var client: BridgeClient
@@ -15,6 +17,9 @@ struct FileBrowserView: View {
     @State private var searchText: String = ""
     @State private var isLoading = false
     @State private var errorText: String?
+    @State private var showUploadImporter = false
+    @State private var isUploading = false
+    @State private var uploadStatusText: String?
 
     private var filteredEntries: [DirectoryEntry] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -72,6 +77,37 @@ struct FileBrowserView: View {
                 .background(AppTheme.bg)
 
                 Divider().background(AppTheme.border)
+
+                if let status = uploadStatusText {
+                    HStack(spacing: 8) {
+                        if isUploading {
+                            ProgressView()
+                                .tint(AppTheme.cyan)
+                                .scaleEffect(0.85)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AppTheme.green)
+                        }
+                        Text(status)
+                            .font(.caption)
+                            .foregroundColor(AppTheme.textPrimary)
+                            .lineLimit(2)
+                        Spacer()
+                        if !isUploading {
+                            Button {
+                                uploadStatusText = nil
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption2)
+                                    .foregroundColor(AppTheme.textSecondary)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.surface)
+                    Divider().background(AppTheme.border)
+                }
 
                 if isLoading {
                     Spacer()
@@ -150,7 +186,15 @@ struct FileBrowserView: View {
                     Button("Đóng") { dismiss() }
                         .foregroundColor(AppTheme.cyan)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button {
+                        showUploadImporter = true
+                    } label: {
+                        Image(systemName: "arrow.up.doc")
+                            .foregroundColor(AppTheme.cyan)
+                    }
+                    .disabled(isUploading)
+
                     Button {
                         Task { await load(path: currentPath.isEmpty ? initialPath : currentPath) }
                     } label: {
@@ -158,6 +202,13 @@ struct FileBrowserView: View {
                             .foregroundColor(AppTheme.cyan)
                     }
                 }
+            }
+            .fileImporter(
+                isPresented: $showUploadImporter,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true
+            ) { result in
+                Task { await handleUploadSelection(result) }
             }
             .onChange(of: sortMode) { _ in
                 Task { await load(path: currentPath.isEmpty ? initialPath : currentPath) }
@@ -242,5 +293,51 @@ struct FileBrowserView: View {
             errorText = error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func handleUploadSelection(_ result: Result<[URL], Error>) async {
+        let urls: [URL]
+        switch result {
+        case .failure(let err):
+            errorText = err.localizedDescription
+            return
+        case .success(let picked):
+            urls = picked
+        }
+        guard !urls.isEmpty else { return }
+
+        let targetDir = currentPath.isEmpty ? initialPath : currentPath
+        isUploading = true
+        errorText = nil
+        var uploadedNames: [String] = []
+
+        for (idx, url) in urls.enumerated() {
+            var staged: AttachedFile?
+            do {
+                let file = try LocalFileStaging.copyToTemp(from: url)
+                staged = file
+                uploadStatusText = "Đang gửi lên PC (\(idx + 1)/\(urls.count)): \(file.name)..."
+                let res = try await client.uploadRemoteFile(
+                    localURL: file.localURL,
+                    filename: file.name,
+                    targetDirectory: targetDir
+                )
+                uploadedNames.append(res.name)
+                try? FileManager.default.removeItem(at: file.localURL)
+            } catch {
+                if let f = staged {
+                    try? FileManager.default.removeItem(at: f.localURL)
+                }
+                isUploading = false
+                uploadStatusText = nil
+                errorText = "Lỗi tải tệp lên PC: \(error.localizedDescription)"
+                return
+            }
+        }
+
+        isUploading = false
+        uploadStatusText = "Đã gửi lên PC: \(uploadedNames.joined(separator: ", "))"
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        await load(path: targetDir)
     }
 }

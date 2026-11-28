@@ -237,10 +237,49 @@ struct DirectoryListing: Codable {
     var error: String?
 }
 
+struct FileUploadResponse: Codable {
+    var ok: Bool?
+    var path: String
+    var name: String
+    var size: Int64
+}
+
 struct AttachedImage: Identifiable, Equatable {
     let id = UUID()
     let data: Data
     let mimeType: String
+}
+
+struct AttachedFile: Identifiable, Equatable {
+    let id = UUID()
+    let localURL: URL
+    let name: String
+    let size: Int64
+
+    var formattedSize: String {
+        ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+}
+
+enum LocalFileStaging {
+    static func copyToTemp(from url: URL) throws -> AttachedFile {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        let filename = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agyr_upload_\(UUID().uuidString)_\(filename)")
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+        try FileManager.default.copyItem(at: url, to: dest)
+        let attrs = try FileManager.default.attributesOfItem(atPath: dest.path)
+        let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        return AttachedFile(localURL: dest, name: filename, size: size)
+    }
 }
 
 enum ConnectionState: Equatable {

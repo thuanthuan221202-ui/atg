@@ -6,13 +6,18 @@ const { URL } = require('url');
 const { WebSocketServer } = require('ws');
 const qrcode = require('qrcode-terminal');
 
-const { loadOrCreateConfig, getNetworkAddresses, normalizeWindowsPath } = require('./config');
+const { loadOrCreateConfig, saveConfig, getNetworkAddresses, normalizeWindowsPath } = require('./config');
 const { AcpClient } = require('./acp-client');
 
 const config = loadOrCreateConfig();
 const acp = new AcpClient({
   agyBin: config.agyBin,
-  defaultCwd: config.defaultCwd
+  defaultCwd: config.defaultCwd,
+  autoApproveAll: config.autoApproveAll,
+  onAutoApproveChange: (enabled) => {
+    config.autoApproveAll = enabled;
+    saveConfig(config);
+  }
 });
 
 const PUBLIC_INDEX = path.join(__dirname, '..', 'public', 'index.html');
@@ -34,10 +39,28 @@ function sendJson(res, status, data) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Filename',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
   });
   res.end(body);
+}
+
+function sanitizeFilename(rawName) {
+  const base = path.basename(String(rawName || '').trim());
+  const cleaned = base.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^\.+$/, '');
+  return cleaned || `upload_${Date.now()}`;
+}
+
+function getUniqueFilePath(dir, filename) {
+  let candidate = path.join(dir, filename);
+  if (!fs.existsSync(candidate)) return candidate;
+  const ext = path.extname(filename);
+  const stem = ext ? filename.slice(0, -ext.length) : filename;
+  for (let i = 1; i < 10000; i++) {
+    candidate = path.join(dir, `${stem} (${i})${ext}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(dir, `${stem}_${Date.now()}${ext}`);
 }
 
 function listWindowsDrives() {
@@ -151,7 +174,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Filename',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
     });
     return res.end();
@@ -252,14 +275,17 @@ const server = http.createServer(async (req, res) => {
     try {
       const st = fs.statSync(filePath);
       if (st.isDirectory()) return sendJson(res, 400, { error: 'Path is a directory' });
-      if (st.size > 100 * 1024 * 1024) {
-        return sendJson(res, 413, { error: 'File too large (>100MB)' });
+      const maxRawBytes = 2 * 1024 * 1024 * 1024;
+      if (st.size > maxRawBytes) {
+        return sendJson(res, 413, { error: 'File too large (>2GB)' });
       }
       const filename = path.basename(filePath);
+      const forceDownload = urlObj.searchParams.get('download') === '1' || path.extname(filename).toLowerCase() === '.ipa';
+      const disposition = forceDownload ? 'attachment' : 'inline';
       res.writeHead(200, {
         'Content-Type': getMimeType(filename),
         'Content-Length': st.size,
-        'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(filename)}`,
         'Access-Control-Allow-Origin': '*'
       });
       fs.createReadStream(filePath).pipe(res);
@@ -267,6 +293,77 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
     }
+  }
+
+  if (pathname === '/api/fs/upload' && req.method === 'POST') {
+    const rawDir = urlObj.searchParams.get('dir') || '';
+    const targetDir = normalizeWindowsPath(rawDir || config.defaultCwd);
+    if (!targetDir || !fs.existsSync(targetDir)) {
+      return sendJson(res, 400, { error: 'Target directory does not exist' });
+    }
+    let dirStat;
+    try {
+      dirStat = fs.statSync(targetDir);
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+    if (!dirStat.isDirectory()) {
+      return sendJson(res, 400, { error: 'Target path is not a directory' });
+    }
+
+    let rawName = urlObj.searchParams.get('filename') || req.headers['x-filename'] || '';
+    try {
+      if (rawName && rawName === req.headers['x-filename']) {
+        rawName = decodeURIComponent(rawName);
+      }
+    } catch (_) {}
+    const safeName = sanitizeFilename(rawName);
+    const destPath = getUniqueFilePath(targetDir, safeName);
+    const maxUploadBytes = 2 * 1024 * 1024 * 1024;
+    const declaredLen = Number(req.headers['content-length'] || 0);
+    if (declaredLen > maxUploadBytes) {
+      return sendJson(res, 413, { error: 'File too large (>2GB)' });
+    }
+
+    let receivedBytes = 0;
+    let settled = false;
+    const ws = fs.createWriteStream(destPath);
+
+    const failUpload = (status, message) => {
+      if (settled) return;
+      settled = true;
+      req.unpipe(ws);
+      ws.destroy();
+      fs.unlink(destPath, () => {});
+      if (!res.headersSent) {
+        sendJson(res, status, { error: message });
+      }
+    };
+
+    req.on('data', (chunk) => {
+      receivedBytes += chunk.length;
+      if (receivedBytes > maxUploadBytes) {
+        failUpload(413, 'File too large (>2GB)');
+        req.destroy();
+      }
+    });
+    req.on('aborted', () => failUpload(499, 'Upload aborted by client'));
+    req.on('error', (err) => failUpload(500, err.message));
+    ws.on('error', (err) => failUpload(500, err.message));
+    ws.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      console.log(`[upload] Saved ${destPath} (${receivedBytes} bytes)`);
+      sendJson(res, 200, {
+        ok: true,
+        path: destPath,
+        name: path.basename(destPath),
+        size: receivedBytes
+      });
+    });
+
+    req.pipe(ws);
+    return;
   }
 
   if (pathname === '/api/sessions') {
@@ -473,6 +570,7 @@ function printConnectionBanner() {
   console.log('==============================================================');
   console.log(`  PC Name       : ${os.hostname()}`);
   console.log(`  Default Folder: ${config.defaultCwd}`);
+  console.log(`  Auto-Approve  : ${config.autoApproveAll ? 'ON' : 'OFF'}`);
   console.log(`  Auth Token    : ${config.token}`);
   console.log('');
   if (funnelUrl) {
